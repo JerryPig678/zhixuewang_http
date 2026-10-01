@@ -49,9 +49,28 @@ The `geeked/` directory is a vendored copy of GeekedTest, slightly adapted for t
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the demo
+# Run the demo (login + score query)
 python demo.py -u YOUR_STUDENT_ID -p YOUR_PASSWORD
+
+# Render the annotated answer sheet of a subject as JPEG
+python demo.py --sheet 数学
+python demo.py --sheet 数学 -e 2   # pick exam by index (1 = latest)
 ```
+
+### Answer Sheet Rendering
+
+`demo.py --sheet <subject>` downloads the answer sheet images and renders
+webpage-style grading annotations onto them with PIL (no browser):
+
+- Red total score bar
+- Wrong-question red boxes + per-question score labels (`13题 14/17 -3`)
+- Per-subquestion deduction grid (`16(2): -3/3`), from the `checksheet`
+  API's `stepDatas[].stepStandardScore` (full scores) and
+  `answerRecordDetails[].subTopics[].stepRecords` (scores)
+- Teacher spot marks (`+1`) at their original positions
+
+Implemented in [answer_sheet.py](answer_sheet.py); also used by the
+[AstrBot QQ plugin](https://github.com/JerryPig678/astrbot_plugin_zhixuewang).
 
 ## File Structure
 
@@ -59,7 +78,8 @@ python demo.py -u YOUR_STUDENT_ID -p YOUR_PASSWORD
 zhixuewang-http/
 ├── custom_provider.py   # Core: 8-step pure-HTTP login orchestrator
 ├── crypto.py            # RC4 + RSA R2/P password encryption
-├── demo.py              # Simple demo: login + query scores
+├── answer_sheet.py      # Answer sheet annotation rendering (PIL)
+├── demo.py              # Demo: login + query scores + answer sheet rendering
 ├── geeked/              # Geetest v4 captcha solver (vendored)
 │   ├── __init__.py
 │   ├── geeked.py        # Main Geeked class
@@ -83,6 +103,7 @@ zhixuewang-http/
 | `opencv-python` | Slide captcha template matching |
 | `ddddocr` | Icon captcha OCR |
 | `numpy` | Image processing |
+| `Pillow` | Answer sheet annotation rendering |
 | `zhixuewang` | Score query API (optional, for demo.py only) |
 
 ## Credits

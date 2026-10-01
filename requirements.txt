@@ -4,3 +4,4 @@ opencv-python
 ddddocr
 numpy
 zhixuewang
+Pillow
