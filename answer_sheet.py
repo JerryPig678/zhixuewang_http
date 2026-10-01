@@ -109,11 +109,19 @@ def build_score_map(sheet_datas: dict, step_datas: list | None = None) -> Dict[i
     return score_map
 
 
-def _draw_label(draw: ImageDraw.Draw, text: str, x: float, y: float, color, fsize: int):
+def _draw_label(draw: ImageDraw.Draw, text: str, x: float, y: float, color, fsize: int,
+                max_width: float | None = None):
+    """在 (x, y) 画红/绿底白字标签, y 为标签顶部; 超过 max_width 时自动缩小字号."""
     font = _load_font(fsize, bold=True)
     pad = max(4, fsize // 5)
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    if max_width and tw + pad * 2 > max_width:
+        fsize = max(12, int(fsize * max_width / (tw + pad * 2)))
+        font = _load_font(fsize, bold=True)
+        pad = max(3, fsize // 5)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     draw.rectangle([x, y, x + tw + pad * 2, y + th + pad * 2], fill=color)
     draw.text((x + pad, y + pad - bbox[1]), text, fill="white", font=font)
     return th + pad * 2
@@ -243,7 +251,8 @@ def annotate_page(img: Image.Image, page: dict, score_map: Dict[int, dict]) -> N
             start = f"{ix_list[0]}题" if len(recs) == 1 else f"{ix_list[0]}-{ix_list[-1]}题"
             deduct = full - got
             label = f"{start} {got:g}/{full:g}" + (f"  -{deduct:g}" if wrong else "")
-            label_h = _draw_label(draw, label, x1, max(0, y1 - fsize * 1.6), color, fsize)
+            label_h = _draw_label(draw, label, x1, max(0, y1 - fsize * 1.6), color, fsize,
+                                  max_width=(x2 - x1))
             sub_y = y1 - fsize * 1.6 + label_h + 6
             if sub_y + fsize * 1.3 < y2 or y1 - fsize * 1.6 < 0:
                 for i, r in recs:
