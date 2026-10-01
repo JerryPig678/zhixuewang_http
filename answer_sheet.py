@@ -184,16 +184,35 @@ def _draw_spot_marks(draw: ImageDraw.Draw, marks: List[dict],
         draw.text((x + pad, y + pad - bbox[1]), content, fill="white", font=font)
 
 
+def _paper_width_mm(page: dict, img: Image.Image) -> float:
+    """由 locatePoint 定位块推断卡纸宽度.
+
+    A3 横向 420mm (maxX≈408-414) / A4 横向 297mm / A4 纵向 210mm (maxX≈204).
+    无定位数据时按图片纵横比 fallback.
+    """
+    lp = page.get("locatePoint") or []
+    if lp:
+        try:
+            max_x = max(p.get("left", 0) + p.get("width", 0) for p in lp)
+            if max_x > 350:
+                return 420.0
+            if max_x > 250:
+                return 297.0
+            return 210.0
+        except (ValueError, TypeError):
+            pass
+    return 420.0 if img.width >= img.height else 210.0
+
+
 def annotate_page(img: Image.Image, page: dict, score_map: Dict[int, dict]) -> None:
     """Draw annotations onto one answer sheet page (in place)."""
     draw = ImageDraw.Draw(img)
-    px_per_mm = img.width / PAPER_W_MM
+    px_per_mm = img.width / _paper_width_mm(page, img)
     fsize = max(22, int(img.width * 0.011))
+    seen_boxes = set()
 
     for sec in page.get("sections") or []:
         if not sec:
-            continue
-        if sec.get("type") == "Object":
             continue
         contents = sec.get("contents") or {}
         sec_pos = sec.get("position") or contents.get("position") or {}
@@ -207,6 +226,10 @@ def annotate_page(img: Image.Image, page: dict, score_map: Dict[int, dict]) -> N
             br_pos = br.get("position") or {}
             ax, ay = _resolve_branch_mm(sec_pos, br_pos)
             bw, bh = br_pos.get("width", 0), br_pos.get("height", 0)
+            box_key = (round(ax, 1), round(ay, 1), round(bw, 1), round(bh, 1))
+            if box_key in seen_boxes:
+                continue
+            seen_boxes.add(box_key)
             x1, y1 = ax * px_per_mm, ay * px_per_mm
             x2, y2 = (ax + bw) * px_per_mm, (ay + bh) * px_per_mm
             if x2 - x1 < 20 or y2 - y1 < 20:
