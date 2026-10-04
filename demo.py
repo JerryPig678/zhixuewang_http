@@ -78,7 +78,7 @@ def query_scores(account) -> None:
 
         print(f"  {name:<12} {score_str:>8} {cr_str:>12} {gr_str:>12}")
 
-        if isinstance(score, (int, float)):
+        if isinstance(score, (int, float)) and name != "总分":
             total += float(score)
             count += 1
 
