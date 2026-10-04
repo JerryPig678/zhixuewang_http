@@ -212,9 +212,35 @@ def _paper_width_mm(page: dict, img: Image.Image) -> float:
     return 420.0 if img.width >= img.height else 210.0
 
 
+def _page_uses_percent(page: dict) -> bool:
+    """页面坐标是否使用百分比字段 (部分卡模板 left/top 为设计分辨率像素,
+    同时提供 leftPercent 等百分比; 旧模板百分比字段为 0 占位)."""
+    for s in page.get("sections") or []:
+        if not s:
+            continue
+        c = s.get("contents") or {}
+        positions = [s.get("position"), c.get("position")]
+        for b in c.get("branch") or []:
+            if b:
+                positions.append(b.get("position"))
+        for pos in positions:
+            if pos and (pos.get("leftPercent") or pos.get("topPercent") or pos.get("widthPercent")):
+                return True
+    return False
+
+
+def _pos_px(pos: dict, img: Image.Image) -> Tuple[float, float, float, float]:
+    """百分比 pos -> (x, y, w, h) 图像像素."""
+    return (pos.get("leftPercent", 0) * img.width,
+            pos.get("topPercent", 0) * img.height,
+            pos.get("widthPercent", 0) * img.width,
+            pos.get("heightPercent", 0) * img.height)
+
+
 def annotate_page(img: Image.Image, page: dict, score_map: Dict[int, dict]) -> None:
     """Draw annotations onto one answer sheet page (in place)."""
     draw = ImageDraw.Draw(img)
+    use_percent = _page_uses_percent(page)
     px_per_mm = img.width / _paper_width_mm(page, img)
     fsize = max(22, int(img.width * 0.011))
     seen_boxes = set()
@@ -232,14 +258,24 @@ def annotate_page(img: Image.Image, page: dict, score_map: Dict[int, dict]) -> N
             if not recs:
                 continue
             br_pos = br.get("position") or {}
-            ax, ay = _resolve_branch_mm(sec_pos, br_pos)
-            bw, bh = br_pos.get("width", 0), br_pos.get("height", 0)
-            box_key = (round(ax, 1), round(ay, 1), round(bw, 1), round(bh, 1))
+            if use_percent:
+                bp_has_pct = any(br_pos.get(k) for k in ("leftPercent", "topPercent", "widthPercent"))
+                if bp_has_pct:
+                    x1, y1, bw, bh = _pos_px(br_pos, img)
+                else:
+                    # branch 无百分比时退化到 section 区域
+                    x1, y1, bw, bh = _pos_px(sec_pos, img)
+                x2, y2 = x1 + bw, y1 + bh
+                box_key = (round(x1, 1), round(y1, 1), round(bw, 1), round(bh, 1))
+            else:
+                ax, ay = _resolve_branch_mm(sec_pos, br_pos)
+                bw, bh = br_pos.get("width", 0), br_pos.get("height", 0)
+                box_key = (round(ax, 1), round(ay, 1), round(bw, 1), round(bh, 1))
+                x1, y1 = ax * px_per_mm, ay * px_per_mm
+                x2, y2 = (ax + bw) * px_per_mm, (ay + bh) * px_per_mm
             if box_key in seen_boxes:
                 continue
             seen_boxes.add(box_key)
-            x1, y1 = ax * px_per_mm, ay * px_per_mm
-            x2, y2 = (ax + bw) * px_per_mm, (ay + bh) * px_per_mm
             if x2 - x1 < 20 or y2 - y1 < 20:
                 continue
             got = sum(r["score"] for _, r in recs)
