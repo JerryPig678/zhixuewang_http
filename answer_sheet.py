@@ -101,12 +101,84 @@ def build_score_map(sheet_datas: dict, step_datas: list | None = None) -> Dict[i
             score_map[topic] = {
                 "score": d.get("score", 0.0),
                 "standard_score": d.get("standardScore", 0.0),
+                "is_correct": d.get("isCorrect", False),
+                "answer": d.get("answer"),  # 选择题学生所选选项, 如 "C"
                 "steps": [(s, f) for _, s, f in steps],
                 "spot_marks": spot_marks,
             }
         except (ValueError, KeyError, TypeError):
             continue
     return score_map
+
+
+# 选择题选项气泡: firstOption/rowOffset 等字段为 96dpi 像素单位, 相对 branch 区域
+_PX2MM = 25.4 / 96.0
+CHOICE_OK = (26, 188, 156)  # 原版同款青绿 (答对选项)
+CHOICE_BAD = (225, 30, 30)  # 答错选项
+
+
+def _draw_choice_bubbles(draw: ImageDraw.Draw, br: dict, score_map: Dict[int, dict],
+                         gx: float, gy: float, gw: float, gh: float, px_per_mm: float):
+    """复刻原版选择题涂色: 学生所涂选项, 答对青绿 / 答错红色.
+
+    布局模型 (由月考英语卡实测校准):
+      - 每行一题, 行距 = gh/n_rows
+      - firstOption 为第一行首个选项气泡, 96dpi 像素单位, 相对 branch 区域
+      - 选项间距自适应: (gw - fo_left - fo_w) / (n-1), 实测各选项数卡均吻合
+    """
+    chooses = br.get("chooses") or []
+    fo = br.get("firstOption") or {}
+    ix_list = br.get("ixList") or []
+    if not chooses or not fo or not ix_list:
+        return
+    fo_l = fo.get("left", 0) * _PX2MM
+    fo_t = fo.get("top", 0) * _PX2MM
+    fo_w = fo.get("width", 0) * _PX2MM
+    fo_h = fo.get("height", 0) * _PX2MM
+    if fo_w <= 0 or fo_h <= 0:
+        return
+    n_opts = len(chooses)
+    pitch_x = (gw - fo_l - fo_w) / (n_opts - 1) if n_opts > 1 else 0.0
+    n_rows = len(ix_list)
+    pitch_y = (gh - fo_t - fo_h) / (n_rows - 1) if n_rows > 1 else 0.0
+    bw_px = max(2, fo_w * px_per_mm)
+    bh_px = max(2, fo_h * px_per_mm)
+    radius = min(bw_px, bh_px) * 0.25
+    for r, q in enumerate(ix_list):
+        rec = score_map.get(q)
+        if not rec:
+            continue
+        ans = rec.get("answer")
+        if not ans or ans not in chooses:
+            continue
+        i = chooses.index(ans)
+        x = (gx + fo_l + i * pitch_x) * px_per_mm
+        y = (gy + fo_t + r * pitch_y) * px_per_mm
+        color = CHOICE_OK if rec.get("is_correct") else CHOICE_BAD
+        draw.rounded_rectangle([x, y, x + bw_px, y + bh_px], radius=radius, fill=color)
+
+
+def _draw_topic_scores(draw: ImageDraw.Draw, ix_list: list, score_map: Dict[int, dict],
+                       gx: float, gy: float, gw: float, gh: float, px_per_mm: float, fsize: int):
+    """解答区域多题号时, 在每条横线末端画原版同款每小题得分 (红色 "56:0分").
+
+    布局: 题号按行优先两列排布 (56 57 第一行), 与原版一致.
+    """
+    recs = [(q, score_map[q]) for q in ix_list if q in score_map]
+    if len(recs) < 2 or gw < 60:
+        return
+    n = len(recs)
+    n_rows = (n + 1) // 2
+    font = _load_font(int(fsize * 0.72), bold=True)
+    cell_h = gh / n_rows * px_per_mm
+    half_w = gw / 2 * px_per_mm
+    for idx, (q, r) in enumerate(recs):
+        row, col = idx // 2, idx % 2
+        text = f"{q}:{r['score']:g}分"
+        tw = draw.textbbox((0, 0), text, font=font)[2]
+        x = gx * px_per_mm + (col + 1) * half_w - tw - fsize * 0.8
+        y = gy * px_per_mm + row * cell_h + (cell_h - fsize) / 2
+        draw.text((x, y), text, fill=RED, font=font)
 
 
 def _draw_label(draw: ImageDraw.Draw, text: str, x: float, y: float, color, fsize: int,
@@ -278,12 +350,18 @@ def annotate_page(img: Image.Image, page: dict, score_map: Dict[int, dict]) -> N
             seen_boxes.add(box_key)
             if x2 - x1 < 20 or y2 - y1 < 20:
                 continue
+            # 选择题涂色 (原版同款): 答对青绿/答错红 (仅毫米模板, 百分比卡无实测数据不画)
+            if not use_percent and br.get("chooses") and br.get("firstOption"):
+                _draw_choice_bubbles(draw, br, score_map, ax, ay, bw, bh, px_per_mm)
             got = sum(r["score"] for _, r in recs)
             full = sum(r["standard_score"] for _, r in recs)
             wrong = [i for i, r in recs if r["score"] < r["standard_score"]]
             color = RED if wrong else GREEN
             if wrong:
                 draw.rectangle([x1, y1, x2, y2], outline=color, width=max(3, fsize // 8))
+            # 多题号解答区域: 每条横线末端画每小题得分 (原版同款 "56:0分")
+            if not use_percent and len(ix_list) >= 2 and not br.get("chooses"):
+                _draw_topic_scores(draw, ix_list, score_map, ax, ay, bw, bh, px_per_mm, fsize)
             start = f"{ix_list[0]}题" if len(recs) == 1 else f"{ix_list[0]}-{ix_list[-1]}题"
             deduct = full - got
             label = f"{start} {got:g}/{full:g}" + (f"  -{deduct:g}" if wrong else "")
